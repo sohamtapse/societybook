@@ -645,7 +645,7 @@ one unreviewed code dump.
 MILESTONE 1 - PROJECT FOUNDATION AND MULTI-TENANCY - Next.js App Router
 setup - TypeScript, Tailwind, shadcn/ui - Neon connection - Drizzle
 configuration and migrations - Environment variable validation - JWT
-authentication foundation - Platform Super Admin login - Society
+authentication foundation - Platform Super Admin login - Society 
 creation - Plan/subscription setup - Flat/user limits - Tenant context
 and authorization helpers - Composite tenant foreign keys - Initial RLS
 design if appropriate - Audit log foundation - Tests proving Society A
