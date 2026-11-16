@@ -1,0 +1,796 @@
+SOCIETY MANAGEMENT + COMPLETE ACCOUNTING SAAS MASTER PRODUCT
+REQUIREMENTS AND IMPLEMENTATION BRIEF For Antigravity Version: 1.0 Date:
+12 November 2026
+
+============================================================ 0.
+INSTRUCTIONS TO THE IMPLEMENTING AGENT
+============================================================
+
+Build a production-minded, multi-tenant Society Management and Complete
+Accounting SaaS for cooperative housing societies, initially targeting
+Maharashtra, India.
+
+Do not produce only a UI mockup, pseudocode, or incomplete scaffold.
+Implement the project in milestones, with working database migrations,
+validation, authorization, server-side business logic, and tests.
+
+Before coding: 1. Inspect the existing repository and preserve useful
+existing work. 2. Report the current project structure and any existing
+stack choices. 3. Create an implementation plan and identify any
+assumptions. 4. Inspect the current documentation, API and licence of
+any third-party package before adopting it. 5. Do not claim statutory
+compliance without professional review. 6. Do not use an accounting npm
+package as the permanent source of truth. Build the core accounting
+engine using our own Drizzle/PostgreSQL schema and services. 7. Use
+supporting npm packages for precise decimal arithmetic, validation, date
+handling, spreadsheet imports and document generation. 8. Implement
+incrementally. At the end of each milestone, run type checking, linting,
+migrations and tests. Fix errors before moving on. 9. Do not silently
+omit features. If a feature is deferred, document it clearly. 10. Never
+expose secrets, database credentials, password hashes or private
+financial information to browser code.
+
+============================================================ 1. PRODUCT
+OVERVIEW ============================================================
+
+Build a multi-tenant Society Management and Complete Accounting SaaS for
+cooperative housing societies.
+
+Technology stack: - Next.js App Router - TypeScript - Tailwind CSS -
+shadcn/ui - Neon PostgreSQL - Drizzle ORM - JWT-based authentication -
+Zod validation - decimal.js for exact monetary calculations - Recharts
+for dashboards - S3-compatible object storage for documents, payment
+proofs and QR images - Server-side authorization and database access
+only
+
+The application has three separate portals:
+
+1.  Platform Super Admin portal (the SaaS owner/operator).
+2.  Society Admin and staff portal.
+3.  Resident portal.
+
+The platform supports multiple societies in one shared Neon PostgreSQL
+database. Society A must never be able to access Society B’s records.
+
+Every society-owned record must be tenant-scoped and protected by
+server-side authorization, composite database constraints and, where
+practical, PostgreSQL Row-Level Security (RLS).
+
+The system must have a real double-entry accounting engine. Posted
+journal lines are the financial source of truth. Do not build this as a
+simple maintenance collection CRUD application.
+
+============================================================ 2. BUSINESS
+MODEL AND PAYMENT SEPARATION
+============================================================
+
+There are TWO completely separate payment flows.
+
+A. SaaS subscription payments: - Society Admin/customer pays the SaaS
+provider. - Use the platform payment gateway ONLY for SaaS subscription
+fees. - Support monthly/annual plans, subscription invoices, renewals,
+expiry, webhook verification, failed payments and subscription status. -
+Platform Super Admin creates societies, assigns plans and controls
+limits. - Platform Super Admin allocates a maximum number of flats to
+each society. - Enforce flat limits in backend/database transactions,
+not only in the UI. - Subscription revenue belongs to the SaaS platform.
+
+B. Society payments: - Residents pay the society directly. - Each
+Society Admin configures the society’s own UPI ID, QR code and/or bank
+details. - Residents scan the society’s QR and pay directly to the
+society’s bank/UPI account. - The SaaS platform must not collect, pool
+or route society maintenance payments into the SaaS provider’s merchant
+account. - Resident can submit UTR/reference number and optionally
+payment proof. - Payment submission creates a PENDING verification
+record. It must not automatically mark dues paid. - Authorized society
+staff verifies the payment against bank/UPI records and approves or
+rejects it. - After approval, create the receipt and post the accounting
+journal entry. - A static UPI QR does not independently confirm payment.
+Automatic confirmation requires a supported bank/UPI verification
+integration; otherwise use manual UTR verification and approval. - Cash
+and bank transfer payments must also be supported.
+
+Keep separate tables/modules for subscription payments and society
+payments.
+
+Suggested platform tables: - platform_users - platform_roles -
+societies - plans - subscriptions - subscription_invoices -
+subscription_payments - subscription_webhooks - society_limits -
+platform_audit_logs
+
+Suggested society payment tables: - society_payment_methods - payments -
+payment_verifications - payment_allocations - receipts
+
+============================================================ 3. USER
+TYPES AND ACCESS CONTROL
+============================================================
+
+A. Platform Super Admin: - Create, activate, suspend and reactivate
+societies. - Assign subscription plans and expiry dates. - Allocate
+maximum flat count and user limits. - View platform-wide society count,
+flat usage, subscriptions and SaaS revenue. - Manage plans, pricing and
+subscription status. - View platform subscription payments. - Platform
+roles must be separate from society roles. - Platform Super Admin must
+not automatically have access to a society’s resident or financial data
+unless a specific audited support-access workflow is implemented.
+
+B. Society Admin: - Manage society profile, settings, buildings, wings
+and flats. - Allocate flats to owners/tenants/residents. - Manage
+resident portal accounts and credentials. - Manage staff and dynamic
+roles/permissions. - Manage maintenance, payments, receipts, expenses,
+accounting, funds, complaints, notices and reports. - Configure society
+UPI QR and bank payment methods. - Approve/reject payment submissions. -
+Initiate resident password resets. - Manage admin/staff permissions. -
+All sensitive actions must be audited.
+
+C. Society Staff: - Society Admin creates custom roles and assigns
+permissions. - Example roles: Chairman, Secretary, Treasurer,
+Accountant, Complaint Manager, Read-only Auditor. - Do not hardcode
+these roles into business logic. - Use dynamic RBAC permissions, e.g.:
+accounting.view accounting.create_entry accounting.approve_entry
+accounting.view_balance_sheet maintenance.generate maintenance.collect
+maintenance.view_all flats.create flats.update complaints.assign
+complaints.resolve reports.export residents.credentials.reset - A user
+may belong to multiple societies with different roles. - Role assignment
+must be scoped by user_id + society_id + role_id.
+
+D. Resident: - Resident portal is read-only for society information. -
+Residents can view their flat information, maintenance demands,
+outstanding dues, payment history, receipts, society notices and
+complaint status (if enabled). - Residents can scan the society QR and
+pay directly to the society. - Residents can submit payment
+UTR/reference and optional payment proof for verification. - Residents
+cannot edit flat/resident details, maintenance demands, payments,
+receipts, accounting, expenses, society settings or other users. -
+Resident’s only business write action is payment-reference/proof
+submission, which creates a pending verification record.
+Authentication/session operations are also allowed. - Resident cannot
+change their own password. - Resident cannot reset another user’s
+password. - Do not expose admin APIs to resident accounts.
+
+============================================================ 4. RESIDENT
+ACCOUNT / FLAT LOGIN REQUIREMENTS
+============================================================
+
+Initial product approach: - Start with one resident portal login account
+per flat. - Design the database so individual owner/tenant logins can be
+added later without redesigning the whole system. - A flat may have
+multiple owners and tenants in its occupancy history. The initial shared
+flat login is a portal access account, not a replacement for
+resident/occupancy records.
+
+When Society Admin creates/allocates a flat: - Backend automatically
+generates a unique flat username. - Example: society code GREENVALLEY +
+flat A-101 => GREENVALLEY-A101. - Username generation must normalize
+characters and handle collisions. - Enforce unique constraint for
+username within the chosen login namespace. If login is globally
+username-based, ensure globally unique usernames; alternatively require
+society code as part of username. - Generate a cryptographically random
+temporary password using a secure random generator. - Store only an
+Argon2id password hash. Never store plaintext or reversibly encrypted
+passwords. - Display the generated initial password to the admin only
+once, immediately after provisioning, so the admin can copy/share it. -
+Do not provide a way to view/retrieve an existing password. Password
+hashing is intentionally one-way. - Society Admin can reset a
+resident/flat password at any time. - On reset, generate a new random
+password, hash it, invalidate the old password, revoke all active
+sessions for that account, increment credential version and display the
+new password to the admin once. - Admin can view usernames and account
+status, but not existing passwords. - Admin can disable/reactivate
+resident portal accounts. - Resident cannot change their own password.
+Password changes are admin-initiated resets only. - Record all
+provisioning, reset, disable and reactivation events in the audit log. -
+Only authorized admin/staff permissions can reset credentials.
+
+IMPORTANT SECURITY REQUIREMENT: The user requested that the Society
+Admin be able to see existing passwords. Do NOT implement this
+literally. It is unsafe to store retrievable passwords. Implement the
+secure equivalent: admin can reset the password and view/copy the newly
+generated password once. Admin cannot view an existing password. Explain
+this security constraint in the product documentation and admin UI.
+
+Suggested flat_portal_accounts fields: - id - society_id - flat_id -
+username - password_hash - status - credential_version -
+password_changed_at - created_at - last_login_at
+
+Suggested related tables: - resident_sessions - credential_reset_logs -
+login_attempts
+
+============================================================ 5.
+AUTHENTICATION AND SECURITY
+============================================================
+
+Use JWT-based authentication with: - Short-lived access JWT (e.g. 10-15
+minutes). - Refresh tokens with rotation and revocation (e.g. 7-30 days,
+configurable). - HTTP-only, Secure, SameSite cookies. - Never store
+access or refresh tokens in localStorage. - Password hashing with
+Argon2id. - Rate limiting and lockout/backoff for repeated login
+failures. - Secure logout and session revocation. - Validate account
+status and current session on sensitive operations. - CSRF protections
+appropriate to cookie-based authentication. - Zod for input
+validation. - Never trust society_id, flat_id, role or permissions sent
+by the browser. - Derive tenant and identity from verified session/JWT,
+then validate membership and entity ownership on the server. - JWT
+claims may include sub, accountType, societyId, flatId (resident only),
+sessionId and credentialVersion. - Do not rely on JWT claims alone for
+sensitive authorization; validate active account/session and current
+permissions. - Separate admin/staff and resident authorization
+policies. - Do not expose database credentials to browser code. - Keep
+secrets in environment variables. - Refresh token should be stored
+hashed in the database. - Revoke all refresh sessions for a resident
+account on password reset. - Log security-relevant events without
+logging passwords or tokens.
+
+============================================================ 6.
+MULTI-TENANT DATABASE ARCHITECTURE
+============================================================
+
+Use one shared Neon PostgreSQL database initially, with society_id on
+every society-owned table.
+
+Mandatory isolation controls: - Every society-owned table must contain
+society_id (or be related through a strictly enforced tenant-owned
+parent). - Use composite unique constraints such as (society_id, id). -
+Use composite foreign keys such as (society_id, flat_id) referencing
+(society_id, id), so a Society A payment cannot reference a Society B
+flat. - Add indexes beginning with society_id for tenant-scoped access
+patterns. - Consider PostgreSQL Row-Level Security (RLS) as defense in
+depth. - Set tenant context transaction-locally for RLS and never use a
+persistent connection-level tenant setting that can leak between pooled
+requests. - Test cross-tenant access attempts explicitly. - Never rely
+only on frontend filtering. - Use database transactions for multi-table
+financial operations. - Do not create one Neon database per society for
+the initial product.
+
+============================================================ 7.
+FUNCTIONAL MODULES
+============================================================
+
+A. SaaS platform: - Platform users/admins - Societies - Plans -
+Subscriptions - Subscription invoices - Subscription payments - Payment
+gateway webhooks - Society limits (max flats, max users) - Platform
+audit logs
+
+B. Society setup: - Society registration/details - Registration number -
+Address and contact details - Society settings - Financial year settings
+(default India/Maharashtra April 1 to March 31) - Buildings and wings -
+Society bank accounts - Society payment methods / UPI QR settings
+
+C. Flat and resident management: - Flats, flat numbers, area in sq.ft.,
+status - Owners and tenants - Resident profiles - Multiple owners per
+flat must be supported - Historical tenant/owner occupancy must be
+preserved - Do not store only one owner/tenant directly on the flat
+row - Use flat_occupancies with start_date/end_date and occupancy type -
+Resident profile and portal login must be separate; not every resident
+needs login - One flat login per flat initially, with a future path to
+individual resident logins
+
+D. Maintenance: - Configurable maintenance heads and calculation
+methods - Monthly maintenance demand generation - Demand line items -
+Flat-wise outstanding dues - Partial payments - Advance payments -
+Unallocated payments - Interest on overdue maintenance (configurable
+according to applicable bye-laws/policy) - Demand notices and
+reminders - Payment allocations to one or more demands - Credit/debit
+adjustments where appropriate
+
+E. Payments and receipts: - Cash - UPI QR paid directly to society -
+Bank transfer - UTR/reference submission - Payment proof upload
+(optional) - Pending verification workflow - Authorized
+approval/rejection - Receipt generation only after verified/approved
+payment - Unique sequential receipt numbering per society and financial
+year/series - Reversals and corrections with audit trail - Never delete
+posted financial records
+
+F. Complaints: - Complaint categories, priority, status and assignment -
+Comments and attachments - Resolution history - Resident view of
+complaint status if enabled - Resident complaint creation is not part of
+the initial scope unless explicitly approved later.
+
+G. Expenses and vendors: - Vendors - Bills/invoices - Expense
+categories - Approval workflow - Recurring expenses - Supporting
+documents - Cash/bank payment - Payables tracking
+
+H. Reports/dashboard: - Collection - Expenses - Outstanding
+maintenance - Flat occupancy - Monthly and yearly reports - Cash book -
+Bank book - Journal register - General ledger - Trial balance - Balance
+sheet - Income and expenditure statement - Receivables and payables -
+Fund statements - Bank reconciliation - Audit reports - Excel/CSV/PDF
+exports
+
+============================================================ 8.
+ACCOUNTING ENGINE - BUILD OUR OWN
+============================================================
+
+Build the core accounting engine ourselves using Neon PostgreSQL +
+Drizzle ORM. Do not depend on an external accounting package as the
+permanent source of truth.
+
+An optional npm accounting library may be evaluated as a helper only
+after reviewing: - Current package API - Licence and commercial-use
+terms - Source code - Test coverage - Maintenance activity - Persistence
+assumptions - Concurrency behavior - Idempotency behavior - Decimal
+precision - Production suitability
+
+Do not assume @lacspace/ledger or any other package is production-ready
+without this review. Do not make the core architecture dependent on it.
+
+Use supporting packages where appropriate: - decimal.js for exact
+monetary arithmetic - zod for validation - date-fns for date handling -
+xlsx or another reviewed spreadsheet library for Excel/CSV
+imports/exports - pdfmake or another reviewed PDF library for
+reports/receipts - Argon2 package for password hashing
+
+Check current package licences and maintenance status before adoption.
+
+Core accounting tables: - financial_years - accounting_periods -
+chart_of_accounts - journal_entries - journal_lines - society_funds -
+fund_transactions - vendors - bills - bank_reconciliations -
+bank_statement_imports - bank_statement_transactions - audit_logs -
+year_closings - audit_sessions - audit_observations
+
+Chart of Accounts should be society-specific and seeded from a
+configurable template. Example accounts: - Cash in Hand (Asset) - Bank
+Account (Asset) - Maintenance Receivable (Asset) - Sundry Creditors
+(Liability) - Sinking Fund (classification according to approved
+accounting policy) - Reserve Fund (classification according to approved
+accounting policy) - Maintenance Income - Interest on Overdue Dues -
+Electricity Expense - Repairs Expense - Security Expense - Water Expense
+
+Do not hardcode statutory account treatment without accountant/auditor
+review.
+
+Example journal entries:
+
+1.  Monthly maintenance demand of Rs. 3,000: Debit Maintenance
+    Receivable Rs. 3,000 Credit Maintenance Income Rs. 3,000
+
+2.  Verified resident payment of Rs. 3,000: Debit Bank Account Rs. 3,000
+    Credit Maintenance Receivable Rs. 3,000
+
+3.  Society pays electrician Rs. 5,000: Debit Repairs Expense Rs. 5,000
+    Credit Bank Account Rs. 5,000
+
+SUBLEDGER DIMENSIONS ON JOURNAL LINES (flat-wise, vendor-wise,
+fund-wise tracking)
+
+A single control account such as Maintenance Receivable or Sundry
+Creditors cannot by itself show who owes what. Do NOT solve this with a
+separate balance table that becomes a second source of truth. Instead,
+journal_lines must carry optional dimension columns so that flat-wise
+dues, vendor ledgers and fund statements are all derived from posted
+journal lines:
+
+- flat_id (nullable): the flat the line relates to.
+- vendor_id (nullable): the vendor/creditor the line relates to.
+- fund_id (nullable): the society fund the line relates to.
+- Optional later: resident_id/member_id, demand_id, bill_id and
+  payment_id references for drill-down, or a generic party_type +
+  party_id pair if more party types are needed.
+
+Rules:
+1. Dimension columns are tenant-scoped. Use composite foreign keys such
+   as (society_id, flat_id) -> flats(society_id, id), (society_id,
+   vendor_id) -> vendors(society_id, id) and (society_id, fund_id) ->
+   society_funds(society_id, id), so a line can never point at another
+   society's flat, vendor or fund.
+2. Mark accounts in chart_of_accounts as subledger control accounts
+   (for example requires_flat, requires_vendor, requires_fund flags).
+   The posting service and a database check/trigger must reject a line
+   on a flagged account that has no matching dimension. Example: a line
+   on Maintenance Receivable must have flat_id; a line on Sundry
+   Creditors must have vendor_id; a line on a fund account must have
+   fund_id.
+3. Dimensions are set at posting time by the central posting service
+   from the source record: maintenance demand lines carry the flat_id;
+   payment receipt and allocation lines carry the flat_id; bill and
+   vendor payment lines carry the vendor_id; fund contribution,
+   utilization and transfer lines carry the fund_id.
+4. Advance payments and unallocated payments (credit balances of a flat)
+   must also carry flat_id, on their own liability/control account, so
+   the flat's net position (dues minus advances) is derivable.
+5. Dimension values on posted lines are immutable like every other
+   posted field. Corrections are made through reversal/correction
+   entries that carry the same dimensions.
+6. Add indexes beginning with society_id, such as (society_id, flat_id,
+   account_id, entry_date) and (society_id, vendor_id, account_id,
+   entry_date), (society_id, fund_id, account_id, entry_date), to keep
+   subledger queries fast.
+7. Reconciliation invariant: for every control account and period, the
+   sum of its dimension-wise balances must equal the control account's
+   general-ledger balance. Add an automated check and a report that
+   flags any difference.
+8. Any cached or materialized summary (for example flat outstanding for
+   the dashboard) must be rebuildable from journal lines and
+   reconciled against them, as required below.
+
+Reports that rely on dimensions: flat-wise outstanding and flat ledger,
+vendor ledger and payables ageing, fund-wise statement, and receivables
+schedule for audit.
+
+Mandatory accounting rules: - Every posted journal entry must have equal
+debit and credit totals. - Each entry must belong to one society and one
+financial year/accounting period. - Debit and credit must be
+non-negative and a line must not have both debit and credit greater than
+zero. - Posted entries must be immutable. - Corrections must use
+reversal/correction entries, never deletion or silent editing. - Every
+journal entry must have source_type/source_id (maintenance demand,
+payment, expense, manual journal, fund transaction, etc.). - Prevent
+posting into locked accounting periods. - Journal header and lines must
+be created atomically in one database transaction. - Posting service
+must validate balanced totals using exact decimal arithmetic. - Use
+PostgreSQL NUMERIC(14,2) or suitable precision for money; do not use
+JavaScript floating-point for money. - Use exact decimal arithmetic in
+application services. - Add database constraints and, where appropriate,
+triggers/controlled procedures as additional safeguards. - Voucher
+numbering must be unique within the relevant society/financial
+year/series. - Add maker-checker approval for sensitive transactions if
+enabled by society policy. - Maintain full audit history. - Implement
+idempotency keys/source uniqueness to prevent duplicate posting from
+retries/webhooks. - Do not update cached balances independently. If
+materialized summaries/caches are added for performance, they must be
+rebuildable and reconciled against journal lines.
+
+Reports derived from posted journal lines: - Cash book - Bank book -
+Journal register - General ledger - Trial balance - Balance sheet -
+Income and expenditure statement - Receivables/payables - Fund-wise
+balances - Flat-wise ledger and outstanding (by flat_id) - Vendor ledger
+(by vendor_id) - Audit schedules
+
+============================================================ 9. BANK
+RECONCILIATION - NO BANK CONNECTION REQUIRED FOR MVP
+============================================================
+
+Bank reconciliation means comparing the society’s bank statement with
+the bank transactions recorded in the application’s accounting ledger.
+
+A direct bank account connection is NOT required for the initial
+version.
+
+MVP workflow: 1. Society Admin downloads a statement from their bank. 2.
+Admin uploads CSV or Excel statement. 3. Application parses and
+validates statement rows. 4. Application attempts to match bank
+transactions with posted ledger transactions using date, amount,
+UTR/reference and description. 5. Show matched, unmatched and ambiguous
+transactions. 6. Admin reviews and confirms matches. 7. Missing bank
+charges or other transactions can be entered through an authorized
+accounting workflow. 8. Generate a reconciliation report showing book
+balance, bank statement balance and reconciling items. 9. Preserve the
+imported statement and reconciliation audit trail.
+
+Do not automatically create accounting entries just because a statement
+row is imported. Require review/approval for unmatched entries and
+adjustments.
+
+Possible future enhancement: - Authorized bank-data provider or
+supported bank API integration, only after evaluating availability,
+cost, consent, security and compliance. - Never request or store
+internet banking passwords.
+
+============================================================ 10. FUNDS
+AND MAHARASHTRA COOPERATIVE SOCIETY SUPPORT
+============================================================
+
+Support configurable accounting and reporting for: - Sinking Fund -
+Repairs and Maintenance Fund - Reserve Fund - Interest on overdue
+maintenance - Other society-specific funds and charges
+
+Requirements: - Separate fund ledger/balance tracking. - Contributions
+and utilization tracking. - Fund allocation and transfer entries. -
+Reports showing opening balance, contributions, utilization and closing
+balance. - Configurable rates and calculation methods. - Do not hardcode
+contribution rates, interest rates or statutory treatments. - Configure
+according to society bye-laws, applicable Maharashtra cooperative
+law/rules and auditor-approved accounting policy. - Provide audit module
+with read-only auditor access, trial balance, ledger, bank
+reconciliation, outstanding schedules, fund schedules, observations,
+rectification status and final report attachments. - Provide financial
+statements and AGM-ready exports. - Financial year default: April 1 to
+March 31, configurable where appropriate. - Year closing: reconcile
+bank, receivables, payables, funds, verify trial balance, close
+income/expense accounts as per approved policy, carry forward
+balance-sheet accounts, create opening balances and lock the prior
+year. - Do not delete or reset historical transactions during year
+closing.
+
+This product must not claim statutory compliance until a qualified
+Maharashtra cooperative society accountant/auditor reviews the chart of
+accounts, accounting treatments, fund rules, interest rules, statements
+and reports against current applicable laws, rules, circulars and
+registered bye-laws.
+
+============================================================ 11.
+DATABASE TABLE INVENTORY
+============================================================
+
+Organize Drizzle schema into modules. The following is a planning
+inventory; inspect relationships and normalize as needed.
+
+Platform: - platform_users - platform_roles - platform_user_roles -
+societies - plans - subscriptions - subscription_invoices -
+subscription_payments - subscription_webhooks - society_limits -
+platform_audit_logs
+
+Authentication and authorization: - users (admin/staff identities if
+shared identity model is used) - society_roles - permissions -
+role_permissions - user_society_roles - flat_portal_accounts -
+resident_sessions - credential_reset_logs - login_attempts
+
+Society and residents: - society_settings - buildings - wings - flats -
+residents - flat_occupancies - society_bank_accounts -
+society_payment_methods
+
+Maintenance and payments: - maintenance_heads - maintenance_demands -
+maintenance_demand_items - payments - payment_verifications -
+payment_allocations - receipts - payment_adjustments
+
+Accounting: - financial_years - accounting_periods - chart_of_accounts -
+journal_entries - journal_lines - society_funds - fund_transactions -
+vendors - bills - bank_statement_imports - bank_statement_transactions -
+bank_reconciliations - year_closings
+
+Complaints and documents: - complaints - complaint_comments -
+attachments - notices
+
+Audit: - audit_logs - audit_sessions - audit_observations -
+report_snapshots (only if required; reports should otherwise derive from
+ledger)
+
+Important database constraints: - Composite unique constraints on
+(society_id, id) where needed for composite foreign keys. - Composite
+foreign keys to prevent cross-society references. - Unique flat number
+within the appropriate building/wing/society scope. - Unique resident
+username according to login namespace. - Unique voucher numbers within
+society/year/series. - Unique receipt numbers within
+society/year/series. - Unique idempotency keys or source references to
+prevent duplicate financial posting. - Check constraints for valid
+nonnegative amounts and debit/credit line rules. - Foreign keys and
+indexes for all important relationships. - Use proper delete
+restrictions for posted financial records. - journal_lines dimension
+columns (flat_id, vendor_id, fund_id) use composite tenant foreign keys
+and are indexed starting with society_id. - Check constraint/trigger
+requiring the right dimension on subledger control accounts (flat for
+receivable and advance accounts, vendor for payable accounts, fund for
+fund accounts).
+
+Use PostgreSQL NUMERIC for financial values. Use UUID primary keys
+unless there is a well-justified reason otherwise.
+
+============================================================ 12. BANK
+RECONCILIATION DETAILS
+============================================================
+
+Bank reconciliation is a comparison process, not necessarily a direct
+bank integration.
+
+The system should show: - Bank statement closing balance. - Ledger/book
+closing balance. - Matched deposits. - Matched withdrawals. - Unmatched
+bank statement entries. - Unmatched book entries. - Cheques issued but
+not cleared, if relevant. - Deposits in transit, if relevant. - Bank
+charges not yet entered. - Reconciliation difference. - Reconciliation
+status and date. - User who imported and approved reconciliation.
+
+Support CSV/Excel import first. PDF statement extraction can be a later
+feature because PDF formats vary and require careful validation.
+
+Never mark an unmatched transaction reconciled without an explicit
+review/approval workflow.
+
+============================================================ 13.
+DASHBOARDS AND PORTALS
+============================================================
+
+A. Platform Super Admin dashboard: - Total societies - Active/suspended
+societies - Total allocated flats and used flat limits - Active
+subscriptions - Expiring subscriptions - Subscription revenue - Plan
+management - Create society wizard - Assign society admin - Assign
+flat/user limits
+
+B. Society Admin dashboard: - Total flats and occupancy - Monthly
+demand - Monthly collections - Outstanding dues - Expenses - Pending
+payment verification - Pending complaints - Bank reconciliation status -
+Fund balances - Quick actions: generate demands, verify payments, create
+expense, view ledger
+
+C. Resident dashboard: - Flat information - Outstanding dues -
+Maintenance demands - Society UPI QR / payment instructions - Payment
+reference submission - Payment history - Download receipts - Notices -
+Complaint status if enabled - Profile details in read-only mode
+
+Resident portal must be mobile-first and simple. Do not show accounting
+admin controls to residents.
+
+============================================================ 14. UI/UX
+REQUIREMENTS
+============================================================
+
+Use a polished, professional, minimal SaaS interface. - Responsive
+desktop and mobile layouts. - Consistent sidebar/navigation for admin. -
+Clear tables with search, filtering, sorting and pagination. - Form
+validation with useful error messages. - Loading, empty, success and
+failure states. - Confirmation dialogs for sensitive actions. -
+Financial amounts formatted in INR (Rs./₹). - Dates displayed in Indian
+format where appropriate. - Use accessible components and keyboard
+navigation. - Avoid excessive gradients and visual clutter. - Separate
+admin and resident layouts. - Resident portal should be especially
+simple and mobile-friendly. - Use charts only where they help explain
+collections, expenses and trends. - Never use sample/demo figures as if
+they were real financial data.
+
+============================================================ 15. REPORTS
+============================================================
+
+Required reports: - Flat-wise maintenance demand - Flat-wise
+outstanding - Collection register - Receipt register - Payment
+verification pending list - Cash book - Bank book - Journal register -
+General ledger - Trial balance - Balance sheet - Income and expenditure
+statement - Receivables and payables - Vendor ledger - Fund-wise
+statement - Bank reconciliation statement - Financial year closing
+report - Audit schedules and observations - Monthly and yearly society
+summary
+
+Reports must use posted accounting entries and approved operational
+records. Clearly distinguish pending/unverified payments from
+received/posted payments.
+
+Provide PDF and Excel/CSV exports with report period, society identity,
+generation timestamp and relevant filters.
+
+============================================================ 16.
+IMPLEMENTATION ROADMAP
+============================================================
+
+Build in these milestones. Do not attempt to implement every feature in
+one unreviewed code dump.
+
+MILESTONE 1 - PROJECT FOUNDATION AND MULTI-TENANCY - Next.js App Router
+setup - TypeScript, Tailwind, shadcn/ui - Neon connection - Drizzle
+configuration and migrations - Environment variable validation - JWT
+authentication foundation - Platform Super Admin login - Society
+creation - Plan/subscription setup - Flat/user limits - Tenant context
+and authorization helpers - Composite tenant foreign keys - Initial RLS
+design if appropriate - Audit log foundation - Tests proving Society A
+cannot access Society B
+
+MILESTONE 2 - SOCIETY MANAGEMENT - Society settings - Buildings and
+wings - Flats - Residents - Multiple owners - Historical occupancy -
+Flat portal account provisioning - Username generation - Secure
+temporary password generation - Admin-only password reset - Session
+revocation - Staff users, roles and permissions
+
+MILESTONE 3 - ACCOUNTING FOUNDATION - Financial years and accounting
+periods - Chart of accounts - Journal entry and journal line tables -
+Central posting service - Exact decimal calculations - Balanced journal
+validation - Idempotency protection - Reversal entries - Journal line
+dimensions (flat_id, vendor_id, fund_id) with subledger control-account
+flags and validation - Flat ledger, vendor ledger and fund ledger
+derived from dimensions - General ledger - Trial balance - Opening
+balances (including flat-wise opening dues, vendor-wise opening payables
+and fund-wise opening balances) - Accounting tests
+
+MILESTONE 4 - MAINTENANCE AND COLLECTIONS - Maintenance heads and
+calculation rules - Demand generation - Demand line items - Outstanding
+calculations - Partial/advance/unallocated payments - Society QR setup -
+Payment reference submission - Payment verification and approval -
+Receipt generation - Automatic journal posting after approval
+
+MILESTONE 5 - EXPENSES AND FUNDS - Vendor management - Bills and
+expenses - Approval workflow - Cash/bank payments -
+Sinking/repairs/reserve fund tracking - Fund contributions and
+utilization - Automatic journal posting
+
+MILESTONE 6 - REPORTING AND BANK RECONCILIATION - Cash book - Bank
+book - General ledger - Trial balance - Balance sheet - Income and
+expenditure - Receivables/payables - CSV/Excel bank statement import -
+Transaction matching - Reconciliation workflow and report - PDF/Excel
+exports
+
+MILESTONE 7 - YEAR CLOSING AND AUDIT - Period locking - Bank and ledger
+reconciliation checks - Outstanding and payable schedules - Fund
+reconciliation - Financial year closing - Opening balance
+carry-forward - Auditor read-only access - Audit observations and
+rectification - Audit report attachments
+
+MILESTONE 8 - COMPLAINTS AND PRODUCTION READINESS - Complaints -
+Notices - Notifications - Security review - Tenant isolation tests -
+Financial integrity tests - Backup and restore procedure - Monitoring
+and error reporting - Performance testing - Deployment documentation
+
+============================================================ 17. TESTING
+REQUIREMENTS
+============================================================
+
+Create automated tests for: - Login and logout. - JWT expiry and refresh
+rotation. - Password hashing and admin reset. - Resident cannot change
+own password. - Resident cannot edit flat/society information. -
+Resident cannot access accounting. - Resident can submit payment
+reference but cannot mark payment paid. - Admin permission checks. -
+Cross-tenant isolation. - Flat limit enforcement under concurrent
+creation. - Duplicate payment webhook handling. - Duplicate journal
+posting prevention. - Debit/credit balance enforcement. - Reversal
+entries. - Locked accounting period restrictions. - Trial balance
+correctness. - Balance sheet correctness. - Posting on a subledger
+control account without the required dimension is rejected. - Dimension
+foreign keys cannot reference another society's flat, vendor or fund. -
+Sum of flat-wise/vendor-wise/fund-wise balances equals the control
+account balance in the general ledger. - Partial payment
+allocations. - Advance and unallocated payments. - Bank statement
+matching. - Financial year closing. - Audit trail creation.
+
+Use realistic test fixtures for multiple societies and different user
+roles.
+
+============================================================ 18.
+IMPORTANT BUSINESS AND SECURITY RULES
+============================================================
+
+1.  A resident payment is not confirmed merely because the resident
+    uploads a screenshot or UTR. It must be verified by authorized
+    society staff or a trusted payment verification integration.
+2.  A receipt should only be issued according to the society’s
+    configured receipt policy after payment confirmation.
+3.  Never delete posted journal entries.
+4.  Never edit posted journal lines silently.
+5.  Use reversal/correction entries.
+6.  Never store plaintext passwords.
+7.  Admin can reset resident passwords and see the newly generated
+    password once, but cannot view an existing password.
+8.  Residents cannot change their own password.
+9.  Every sensitive action must be audited.
+10. Never trust society_id from the client.
+11. Every tenant-owned query must be tenant-scoped.
+12. Use database constraints to prevent cross-tenant references.
+13. Use exact decimal arithmetic for money.
+14. Do not treat unverified payments as collections.
+15. Do not mix SaaS subscription revenue with society funds.
+16. Do not claim statutory compliance until reviewed by a qualified
+    professional.
+17. Do not store internet banking passwords or ask users to provide
+    them.
+18. Do not automatically create journal entries from imported bank
+    statement rows without review.
+19. Do not let cached balances become an independent source of truth.
+20. Make financial operations idempotent and transactional.
+
+============================================================ 19.
+ENVIRONMENT VARIABLES AND DEPLOYMENT
+============================================================
+
+Use an .env.example file with placeholders only, for example: -
+DATABASE_URL - DATABASE_URL_DIRECT (if required for migrations) -
+JWT_ACCESS_SECRET - JWT_REFRESH_SECRET - APP_URL - STORAGE_ENDPOINT -
+STORAGE_BUCKET - STORAGE_ACCESS_KEY - STORAGE_SECRET_KEY -
+SUBSCRIPTION_PAYMENT_GATEWAY_KEY - SUBSCRIPTION_PAYMENT_GATEWAY_SECRET
+
+Do not commit real secrets.
+
+Use Neon pooled connection for normal serverless application queries
+where appropriate and direct connection for migrations if required by
+the Neon/Drizzle setup.
+
+Provide: - Local setup instructions - Database migration commands - Seed
+commands - Development commands - Build and production commands -
+Deployment instructions - Backup/recovery guidance
+
+============================================================ 20.
+DEFINITION OF DONE
+============================================================
+
+The first production-capable release is not complete until: - Platform
+can create and configure societies. - Subscription plans and flat limits
+work. - Societies are isolated at API and database levels. - Society
+Admin can manage flats, residents and staff. - Flat resident accounts
+are provisioned securely. - Only authorized admins can reset resident
+passwords. - Resident portal is read-only except payment-reference
+submission and session/auth operations. - Maintenance demands can be
+generated. - Payments can be verified and receipts generated. - Every
+confirmed financial event posts balanced journal entries. - Trial
+balance agrees (total debits equal total credits). - General ledger and
+financial reports derive from journal lines. - Expenses, vendors and
+funds are supported. - Bank statements can be imported and reconciled
+without direct bank account connection. - Financial year closing
+preserves historical records. - Audit logs exist for sensitive
+operations. - Automated tenant isolation and financial integrity tests
+pass. - Documentation explains configuration, security and operational
+limitations.
+
+END OF MASTER REQUIREMENTS
