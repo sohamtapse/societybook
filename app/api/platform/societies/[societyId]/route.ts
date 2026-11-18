@@ -82,17 +82,27 @@ export async function PATCH(
       // 3. Update subscription expiry if provided
       if (data.subscriptionExpiresAt !== undefined) {
         const newExpiry = new Date(data.subscriptionExpiresAt);
+        const isFuture = newExpiry > new Date();
+
         await tx
           .update(subscriptions)
           .set({
             expiresAt: newExpiry,
-            status: newExpiry > new Date() ? "active" : "expired",
+            status: isFuture ? "active" : "expired",
             updatedAt: new Date(),
           })
           .where(eq(subscriptions.societyId, societyId));
 
-        // If extended and was suspended, reactivate
-        if (newExpiry > new Date() && updatedSoc.status === "suspended") {
+        // If the subscription is expired, the society MUST be suspended
+        if (!isFuture) {
+          await tx
+            .update(societies)
+            .set({ status: "suspended", updatedAt: new Date() })
+            .where(eq(societies.id, societyId));
+          updatedSoc.status = "suspended";
+        } else if (data.status === undefined && existing.status === "suspended") {
+          // Only auto-reactivate if the admin did NOT explicitly provide a status
+          // and was merely extending an expired subscription
           await tx
             .update(societies)
             .set({ status: "active", updatedAt: new Date() })
