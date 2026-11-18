@@ -8,6 +8,7 @@ import {
   userSocietyRoles,
   rolePermissions,
   permissions,
+  societyRoles,
 } from "@/db/schema";
 import {
   verifyAccessToken,
@@ -24,6 +25,7 @@ export interface AuthenticatedUser {
   flatId?: string;
   credentialVersion: number;
   permissions?: Set<string>;
+  isSystemAdmin?: boolean;
 }
 
 export class AuthenticationError extends Error {
@@ -123,20 +125,28 @@ export async function requireAuth(): Promise<AuthenticatedUser> {
       throw new AuthenticationError("Credentials have been revoked. Please re-login");
     }
 
-    // Load active society permissions
+    // Load active society roles, permissions, and admin status
     const activeRoles = await db
       .select({
         permissionCode: permissions.code,
+        isSystemAdmin: societyRoles.isSystemAdmin,
       })
       .from(userSocietyRoles)
       .innerJoin(
+        societyRoles,
+        and(
+          eq(societyRoles.id, userSocietyRoles.roleId),
+          eq(societyRoles.societyId, userSocietyRoles.societyId)
+        )
+      )
+      .leftJoin(
         rolePermissions,
         and(
           eq(rolePermissions.roleId, userSocietyRoles.roleId),
           eq(rolePermissions.societyId, userSocietyRoles.societyId)
         )
       )
-      .innerJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
+      .leftJoin(permissions, eq(permissions.id, rolePermissions.permissionId))
       .where(
         and(
           eq(userSocietyRoles.userId, u.id),
@@ -145,7 +155,10 @@ export async function requireAuth(): Promise<AuthenticatedUser> {
         )
       );
 
-    const userPerms = new Set<string>(activeRoles.map((r) => r.permissionCode));
+    const isSystemAdmin = activeRoles.some((r) => r.isSystemAdmin);
+    const userPerms = new Set<string>(
+      activeRoles.map((r) => r.permissionCode).filter(Boolean) as string[]
+    );
 
     return {
       id: u.id,
@@ -154,6 +167,7 @@ export async function requireAuth(): Promise<AuthenticatedUser> {
       societyId: payload.societyId,
       credentialVersion: u.credentialVersion,
       permissions: userPerms,
+      isSystemAdmin,
     };
   }
 
@@ -218,7 +232,11 @@ export async function requireSocietyStaff(
     throw new AuthorizationError("Cross-tenant access prohibited");
   }
 
-  if (requiredPermission && !auth.permissions?.has(requiredPermission)) {
+  if (
+    requiredPermission &&
+    !auth.isSystemAdmin &&
+    !auth.permissions?.has(requiredPermission)
+  ) {
     throw new AuthorizationError(`Missing required permission: ${requiredPermission}`);
   }
 
